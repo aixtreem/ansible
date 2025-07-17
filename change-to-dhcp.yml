@@ -78,4 +78,118 @@
       become: true
       when: network_type == "netplan"
 
-    - name: Sauvegarder la configuration actuelle (NetworkManager
+    - name: Sauvegarder la configuration actuelle (NetworkManager)
+      ansible.builtin.copy:
+        src: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
+        dest: "/etc/NetworkManager/system-connections/{{ nm_conn }}.bak"
+        remote_src: true
+      become: true
+      when: network_type == "networkmanager"
+
+
+    # -------------------------------------------------------
+    # 3. Conversion vers DHCP selon la méthode détectée
+    # -------------------------------------------------------
+
+    # --- Méthode ifupdown (interfaces)
+    - name: Supprimer les paramètres statiques de l’interface (interfaces)
+      ansible.builtin.replace:
+        path: /etc/network/interfaces
+        regexp: '^(\s+)?(address|gateway|netmask|dns-nameservers|dns-search)\s+'
+        state: absent
+        after: '^iface {{ interface_cible }} inet static'
+        before: '^(\s*)(iface|auto|allow-hotplug|source|mapping)\b'
+      become: true
+      when: network_type == "interfaces"
+      notify: restart_networking
+
+    - name: Passer l’interface en DHCP (interfaces)
+      ansible.builtin.replace:
+        path: /etc/network/interfaces
+        regexp: '^iface {{ interface_cible }} inet static'
+        replace: 'iface {{ interface_cible }} inet dhcp'
+      become: true
+      when: network_type == "interfaces"
+      notify: restart_networking
+
+    # --- Méthode netplan
+    - name: Passer l’interface en DHCP (netplan)
+      ansible.builtin.blockinfile:
+        path: "{{ netplan_file }}"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: Set interface DHCP"
+        block: |
+          network:
+            version: 2
+            renderer: networkd
+            ethernets:
+              {{ interface_cible }}:
+                dhcp4: true
+                dhcp6: true
+        insertafter: EOF
+      become: true
+      when: network_type == "netplan"
+      notify: apply_netplan
+
+    # --- Méthode NetworkManager
+    - name: Passer l’interface en DHCP (NetworkManager)
+      ansible.builtin.shell: |
+        nmcli connection modify "{{ nm_conn }}" ipv4.method auto
+        nmcli connection up "{{ nm_conn }}"
+      become: true
+      when: network_type == "networkmanager"
+
+    # --- Si aucune méthode connue n’est détectée
+    - name: Échec si aucune méthode connue n’est détectée
+      ansible.builtin.fail:
+        msg: "Aucune méthode de gestion réseau connue (ifupdown, netplan, NetworkManager) n’a été détectée."
+      when: network_type == "unknown"
+
+
+    # -------------------------------------------------------
+    # 4. Application des modifications
+    # -------------------------------------------------------
+    handlers:
+      - name: restart_networking
+        ansible.builtin.service:
+          name: networking
+          state: restarted
+        become: true
+
+      - name: apply_netplan
+        ansible.builtin.command: netplan apply
+        become: true
+
+
+    # -------------------------------------------------------
+    # 5. Affichage du résultat
+    # -------------------------------------------------------
+    - name: Afficher la configuration finale (interfaces)
+      ansible.builtin.command: cat /etc/network/interfaces
+      register: interfaces_content
+      changed_when: false
+      when: network_type == "interfaces"
+
+    - name: Afficher la configuration finale (netplan)
+      ansible.builtin.command: cat "{{ netplan_file }}"
+      register: netplan_content
+      changed_when: false
+      when: network_type == "netplan"
+
+    - name: Afficher la configuration finale (NetworkManager)
+      ansible.builtin.shell: nmcli connection show "{{ nm_conn }}" | grep -A10 "ipv4.method"
+      register: networkmanager_content
+      changed_when: false
+      when: network_type == "networkmanager"
+
+    - name: Résumé final
+      ansible.builtin.debug:
+        msg: |
+          Méthode réseau : {{ network_type }}
+          Interface cible : {{ interface_cible }}
+          {% if network_type == "interfaces" %}
+          Fichier interfaces modifié : {{ interfaces_content.stdout }}
+          {% elif network_type == "netplan" %}
+          Fichier netplan modifié : {{ netplan_content.stdout }}
+          {% elif network_type == "networkmanager" %}
+          Statut NetworkManager : {{ networkmanager_content.stdout }}
+          {% endif %}
