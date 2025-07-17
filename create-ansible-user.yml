@@ -1,0 +1,39 @@
+---
+- name: Créer le compte ansible et préparer l’accès SSH
+  hosts: esphome
+  become: true
+
+  vars:
+    ansible_pub_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDVTRW/r8ODMWlA+/aDDHngkBaa+ylverl8wQEt1ccjO ansible@semaphore
+"
+
+  tasks:
+    - name: Créer l’utilisateur ansible
+      ansible.builtin.user:
+        name: ansible
+        state: present
+        shell: /bin/bash
+        groups: sudo
+        append: true
+
+    - name: Créer le répertoire .ssh
+      ansible.builtin.file:
+        path: /home/ansible/.ssh
+        state: directory
+        owner: ansible
+        group: ansible
+        mode: '0700'
+
+    - name: Déposer la clé SSH dans authorized_keys
+      ansible.builtin.copy:
+        content: "{{ ansible_pub_key }}"
+        dest: /home/ansible/.ssh/authorized_keys
+        owner: ansible
+        group: ansible
+        mode: '0600'
+
+    - name: Donner à ansible un accès sudo sans mot de passe (optionnel)
+      ansible.builtin.copy:
+        content: "ansible ALL=(ALL:ALL) NOPASSWD:ALL"
+        dest: /etc/sudoers.d/ansible
+        mode: '0440'
