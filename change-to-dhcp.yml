@@ -1,57 +1,43 @@
 ---
-- name: Configurer interface réseau en DHCP sous Debian/Ubuntu
+- name: Passer Debian d'une IP fixe à DHCP (nettoyage du fichier interfaces)
   hosts: all
-  become: yes
-  gather_facts: false  # facultatif, tu peux activer si besoin
+  become: true
+  gather_facts: true
 
   vars:
-    # Optionnel, tu peux définir une interface fixe ici
-    # dhcp_interface: ""
+    interface_cible: "{{ ansible_default_ipv4.interface | default('eth0') }}"  # Interface par défaut
+    # Pour forcer une interface spécifique, définis : interface_cible: "ens33"
+    # Par défaut, on utilise la principale, sinon "eth0" si non détectée
 
   tasks:
-    - name: Detect main network interface (excluding lo)
-      shell: |
-        ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
-      register: detect_interface
-      changed_when: false
+    # Sauvegarde de l’ancien fichier (choisir l’emplacement selon tes besoins)
+    - name: Sauvegarder /etc/network/interfaces
+      ansible.builtin.copy:
+        src: /etc/network/interfaces
+        dest: /etc/network/interfaces.bak
+        remote_src: true
 
-    - name: Set dhcp_interface variable
-      set_fact:
-        dhcp_interface: "{{ detect_interface.stdout }}"
-      when: dhcp_interface is not defined or dhcp_interface == ""
-
-    - name: Vérifier que /etc/network/interfaces existe
-      stat:
-        path: /etc/network/interfaces
-      register: interfaces_stat
-
-    - name: Slurp /etc/network/interfaces only if it exists
-      slurp:
-        path: /etc/network/interfaces
-      register: interfaces_file_slurped
-      when: interfaces_stat.stat.exists
-
-    - name: Debug contenu original /etc/network/interfaces décodé
-      debug:
-        msg: "{{ interfaces_file_slurped.content | b64decode }}"
-      when: interfaces_stat.stat.exists
-
-    - name: Remplacer static par dhcp dans /etc/network/interfaces
-      copy:
+    # Nettoyage complet : on ne garde que la partie loopback (lo)
+    # On efface tout le reste du fichier pour éviter toute interférence
+    - name: Remplacer /etc/network/interfaces par juste la boucle locale (lo)
+      ansible.builtin.copy:
         dest: /etc/network/interfaces
         content: |
-          {{ (interfaces_file_slurped.content | b64decode
-              | regex_replace('(?ms)^iface {{ dhcp_interface }} inet static\n(?:[ \t]+.+\n?)*', '') 
-              | regex_replace('(?m)^auto {{ dhcp_interface }}\n?', '')
-          ) }}
-          auto {{ dhcp_interface }}
-          iface {{ dhcp_interface }} inet dhcp
-        backup: yes
+          auto lo
+          iface lo inet loopback
+
+    # On ajoute ensuite la configuration DHCP de l’interface ciblée
+    - name: Ajouter la configuration DHCP pour {{ interface_cible }}
+      ansible.builtin.lineinfile:
+        path: /etc/network/interfaces
+        insertafter: '^iface lo inet loopback'
+        line: |
+          auto {{ interface_cible }}
+          iface {{ interface_cible }} inet dhcp
       notify: restart networking
-      when: interfaces_stat.stat.exists
 
   handlers:
     - name: restart networking
-      service:
+      ansible.builtin.service:
         name: networking
         state: restarted
