@@ -145,19 +145,20 @@
       when: network_type == "unknown"
 
 
-    # -------------------------------------------------------
-    # 4. Application des modifications
-    # -------------------------------------------------------
-    handlers:
-      - name: restart_networking
-        ansible.builtin.service:
-          name: networking
-          state: restarted
-        become: true
+# -------------------------------------------------------
+# HANDLERS (notifiers)
+# -------------------------------------------------------
+handlers:
+  - name: restart_networking        # Redémarrer le service networking (si ifupdown)
+    ansible.builtin.service:
+      name: networking
+      state: restarted
+    become: true
 
-      - name: apply_netplan
-        ansible.builtin.command: netplan apply
-        become: true
+  - name: apply_netplan             # Appliquer la configuration netplan (si netplan)
+    ansible.builtin.command:
+      cmd: netplan apply
+    become: true
 
 
     # -------------------------------------------------------
