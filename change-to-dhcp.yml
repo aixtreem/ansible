@@ -63,24 +63,25 @@
     - name: Remove static config block and set DHCP in /etc/network/interfaces
       when: interfaces_file.stat.exists and not netplan_dir.stat.exists
       block:
-        - name: Read /etc/network/interfaces
-          slurp:
-            path: /etc/network/interfaces
-          register: interfaces_file
+    - name: Read /etc/network/interfaces
+      slurp:
+       path: /etc/network/interfaces
+      register: interfaces_file_slurped
 
-        - name: Replace static config with DHCP for detected interface
-          copy:
-            dest: /etc/network/interfaces
-            content: |
-              {{
-                (
-                  interfaces_file['content'] | b64decode |
-                  regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(\\s+.+\n)*", "") ~
-                  "\niface {{ dhcp_interface }} inet dhcp\n"
-                ) | trim
-              }}
-            backup: yes
-          notify: restart networking
+    - name: Replace static config with DHCP for detected interface
+       copy:
+        dest: /etc/network/interfaces
+        content: |
+          {{
+            (
+              interfaces_file_slurped['content'] | b64decode |
+              regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(\\s+.+\n)*", "") ~
+              "\niface {{ dhcp_interface }} inet dhcp\n"
+            ) | trim
+          }}
+        backup: yes
+      notify: restart networking
+
 
     # --- systemd-networkd Method ---
     - name: Configure interface via systemd-networkd
