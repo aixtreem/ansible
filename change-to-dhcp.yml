@@ -1,74 +1,55 @@
 ---
 # **********************************************************
-# Passer l’IP de statique à DHCP (Debian/Ubuntu)
-# Version adaptée pour se connecter avec le compte `ansible`
-# ATTENTION : Le compte `ansible` doit exister sur la cible et avoir les droits nécessaires !
+# Playbook : Passer l’IP de statique à DHCP (Debian/Ubuntu)
+# Détecte automatiquement la méthode réseau (ifupdown, netplan, NetworkManager)
+# Applique la conversion adaptée, sauvegarde, redémarre le service, affiche le résultat
+# Se connecte avec le compte ansible (doit avoir les droits sudo)
 # **********************************************************
 
-- name: Passer l’IP de statique à DHCP (Debian/Ubuntu)
-  hosts: esphome            # Cible définie dans l’inventaire
-  remote_user: ansible      # Se connecte avec l’utilisateur `ansible`
-  gather_facts: false       # Pas besoin de collecter les facts ici
+- name: Passer l’IP de statique à DHCP (détection automatique)
+  hosts: esphome
+  remote_user: ansible         # Utilisateur de connexion SSH (ajuster si besoin)
+  gather_facts: false          # Pas besoin de collecter les facts réseaux ici
 
   vars:
-    # À adapter selon ton environnement
-    interface_cible: eth0                # 🔧 Nom de l’interface à configurer (vérifie avec `ip a`)
-    netplan_file: /etc/netplan/00-installer-config.yaml  # 🔧 Chemin du fichier netplan principal
-    nm_conn: "Wired connection 1"        # 🔧 Nom de la connexion NetworkManager (voir `nmcli c`)
+    interface_cible: eth0      # 🔧 Nom de l’interface à configurer (vérifier avec ip a)
+    netplan_file: /etc/netplan/00-installer-config.yaml   # 🔧 Fichier netplan par défaut
+    nm_conn: "Wired connection 1"  # 🔧 Nom de connexion NetworkManager (voir nmcli c)
 
   tasks:
-    ##############################################################
-    ##         Vérification des droits sudo du compte ansible    ##
-    ##                                                          ##
-    ## (Optionnel mais recommandé en production)                ##
-    ## On vérifie que l’utilisateur ansible peut utiliser sudo  ##
-    ##############################################################
 
-    - name: Vérifier les droits sudo du compte ansible
-      ansible.builtin.command: sudo -l
-      register: sudo_check
-      changed_when: false
-      ignore_errors: yes
+    # -------------------------------------------------------
+    # 1. Détection automatique du type de gestion réseau
+    # -------------------------------------------------------
+    # On vérifie quelle méthode est utilisée sur le système cible :
+    # - ifupdown (/etc/network/interfaces + networking.service)
+    # - netplan (/etc/netplan/*.yaml + netplan apply)
+    # - NetworkManager (/etc/NetworkManager/system-connections/)
 
-    - name: Fail si ansible n’a pas les droits nécessaires
-      ansible.builtin.fail:
-        msg: "Le compte 'ansible' doit avoir les droits sudo (passwordless ou non) pour poursuivre."
-      when: sudo_check.rc != 0
-
-
-    ##############################################################
-    ##         Détection de la méthode de gestion réseau        ##
-    ##                                                          ##
-    ## Vérifie quelle méthode est utilisée sur l’hôte :         ##
-    ## - netplan (standard sur Ubuntu/Debian récent)            ##
-    ## - interfaces (ancien style, fichier /etc/network/interfaces)
-    ## - NetworkManager (souvent sur desktop ou cloud)          ##
-    ##############################################################
-
-    - name: Vérifier si netplan est utilisé
-      ansible.builtin.stat:
-        path: "{{ netplan_file }}"
-      register: netplan_stat
-
-    - name: Vérifier si interfaces est utilisé
+    - name: Vérifier si ifupdown est utilisé (interfaces)
       ansible.builtin.stat:
         path: /etc/network/interfaces
       register: interfaces_stat
 
-    - name: Vérifier si NetworkManager est utilisé
+    - name: Vérifier si netplan est utilisé (netplan)
+      ansible.builtin.stat:
+        path: "{{ netplan_file }}"
+      register: netplan_stat
+
+    - name: Vérifier si NetworkManager est utilisé (system-connections)
       ansible.builtin.stat:
         path: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
       register: networkmanager_stat
 
-    - name: Déterminer la méthode de gestion réseau
+    - name: Déterminer la méthode active
       ansible.builtin.set_fact:
         network_type: >-
           {% if netplan_stat.stat.exists %}
             netplan
-          {% elif interfaces_stat.stat.exists %}
-            interfaces
           {% elif networkmanager_stat.stat.exists %}
             networkmanager
+          {% elif interfaces_stat.stat.exists %}
+            interfaces
           {% else %}
             unknown
           {% endif %}
@@ -78,125 +59,23 @@
         msg: "Méthode de gestion réseau détectée : {{ network_type }}"
 
 
-    ##############################################################
-    ##         Sauvegarde de la configuration actuelle          ##
-    ##                                                          ##
-    ## Avant toute modification, sauvegarde la configuration    ##
-    ## actuelle pour pouvoir revenir en arrière en cas de souci ##
-    ##############################################################
-
-    - name: Sauvegarder la configuration netplan
-      ansible.builtin.copy:
-        src: "{{ netplan_file }}"
-        dest: "{{ netplan_file }}.bak"
-        remote_src: true
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: netplan_stat.stat.exists
-
-    - name: Sauvegarder la configuration interfaces
+    # -------------------------------------------------------
+    # 2. Sauvegarde de la configuration actuelle
+    # -------------------------------------------------------
+    - name: Sauvegarder la configuration actuelle (interfaces)
       ansible.builtin.copy:
         src: /etc/network/interfaces
         dest: /etc/network/interfaces.bak
         remote_src: true
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: interfaces_stat.stat.exists
-
-    - name: Sauvegarder la configuration NetworkManager
-      ansible.builtin.copy:
-        src: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
-        dest: "/etc/NetworkManager/system-connections/{{ nm_conn }}.bak"
-        remote_src: true
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: networkmanager_stat.stat.exists
-
-
-    ##############################################################
-    ##         Conversion vers DHCP selon la méthode            ##
-    ##############################################################
-
-    # --- Pour netplan
-    - name: Passer en DHCP avec netplan
-      ansible.builtin.blockinfile:
-        path: "{{ netplan_file }}"
-        backup: yes
-        marker: "# {mark} ANSIBLE MANAGED BLOCK: Set interface DHCP"
-        block: |
-          network:
-            version: 2
-            renderer: networkd
-            ethernets:
-              {{ interface_cible }}:
-                dhcp4: true
-                dhcp6: true
-        insertafter: EOF
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: network_type == "netplan"
-
-    # --- Pour interfaces style Debian ancien
-    # On supprime d’abord les lignes de configuration statique (address, gateway, etc.)
-    # puis on remplace la ligne iface ... static par iface ... dhcp
-    - name: Supprimer les lignes statiques sous eth0
-      ansible.builtin.replace:
-        path: /etc/network/interfaces
-      # Supprime toutes les lignes qui commencent par des espaces puis address, gateway, etc.
-        regexp: '^\s+(address|gateway|netmask|dns-nameservers|dns-search).*'
-      # Ne travaille que dans le bloc "iface eth0 inet static"
-        after: '^iface eth0 inet static'
-        before: '^\s*(iface|auto|source|mapping|allow-hotplug)'
-        state: absent
-    become: true
-
-  # Transformation de "iface eth0 inet static" en "iface eth0 inet dhcp"
-  - name: Remplacer la ligne de configuration par DHCP
-    ansible.builtin.replace:
-      path: /etc/network/interfaces
-      regexp: '^iface eth0 inet static'
-      replace: 'iface eth0 inet dhcp'
-    become: true
-
-    # --- Pour NetworkManager
-    - name: Passer en DHCP avec NetworkManager
-      ansible.builtin.shell: |
-        nmcli connection modify "{{ nm_conn }}" ipv4.method auto
-        nmcli connection up "{{ nm_conn }}"
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: network_type == "networkmanager"
-
-
-    ##############################################################
-    ##         Gestion des erreurs et confirmation              ##
-    ##############################################################
-
-    - name: Échec si aucune méthode connue n’est détectée
-      ansible.builtin.fail:
-        msg: "Aucune méthode de gestion réseau connue (netplan, interfaces, NetworkManager) n’a été détectée."
-      when: network_type == "unknown"
-
-
-    ##############################################################
-    ##         Application de la nouvelle configuration         ##
-    ##############################################################
-
-    - name: Appliquer la configuration netplan (netplan apply)
-      ansible.builtin.command: netplan apply
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: network_type == "netplan"
-
-    - name: Redémarrer le service networking (interfaces)
-      ansible.builtin.service:
-        name: networking
-        state: restarted
-      become: true      # Escalade en root (accès sudo obligatoire)
+      become: true
       when: network_type == "interfaces"
 
+    - name: Sauvegarder la configuration actuelle (netplan)
+      ansible.builtin.copy:
+        src: "{{ netplan_file }}"
+        dest: "{{ netplan_file }}.bak"
+        remote_src: true
+      become: true
+      when: network_type == "netplan"
 
-    ##############################################################
-    ##         Récapitulatif final                              ##
-    ##############################################################
-
-    - name: Message de confirmation
-      ansible.builtin.debug:
-        msg: "La configuration réseau a été modifiée pour passer de statique à DHCP sur {{ interface_cible }} (méthode : {{ network_type }})."
-
-    # ⚠️ À la fin : vérifie que la connexion fonctionne toujours avant de te déconnecter !
-    # Si tu utilises SSH pour administrer, prévois un accès de secours (console, KVM, etc.).
+    - name: Sauvegarder la configuration actuelle (NetworkManager
