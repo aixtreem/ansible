@@ -87,4 +87,52 @@
       ansible.builtin.blockinfile:
         path: "{{ netplan_file }}"
         backup: yes
-        marker: "# {mark} ANS
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: Set interface DHCP"
+        block: |
+          network:
+            version: 2
+            renderer: networkd
+            ethernets:
+              {{ interface_cible }}:
+                dhcp4: true
+                dhcp6: true
+        insertafter: EOF
+      when: network_type == "netplan"
+
+    - name: Passer en DHCP avec interfaces
+      ansible.builtin.blockinfile:
+        path: /etc/network/interfaces
+        backup: yes
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: Set interface DHCP"
+        block: |
+          auto {{ interface_cible }}
+          iface {{ interface_cible }} inet dhcp
+        insertafter: EOF
+      when: network_type == "interfaces"
+
+    - name: Passer en DHCP avec NetworkManager
+      ansible.builtin.shell: |
+        nmcli connection modify "{{ nm_conn }}" ipv4.method auto
+        nmcli connection up "{{ nm_conn }}"
+      when: network_type == "networkmanager"
+
+    - name: Échec si aucun mode de gestion réseau connu n’est trouvé
+      ansible.builtin.fail:
+        msg: "Aucun mode de gestion réseau standard (netplan, interfaces, NetworkManager) n’a été détecté."
+      when: network_type == "unknown"
+
+    # Nettoyage et activation des modifications
+    - name: Appliquer la configuration netplan (si modifié)
+      ansible.builtin.command: netplan apply
+      when: network_type == "netplan" and ansible_local.netplan_modified is defined
+
+    - name: Redémarrer le service Networking (interfaces)
+      ansible.builtin.service:
+        name: networking
+        state: restarted
+      when: network_type == "interfaces"
+
+    # (Optionnel) Affichage du récapitulatif
+    - name: Afficher un message de confirmation
+      ansible.builtin.debug:
+        msg: "La configuration réseau a été modifiée pour utiliser DHCP ({{ interface_cible }}) avec le mode {{ network_type }}."
