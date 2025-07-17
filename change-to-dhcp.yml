@@ -1,92 +1,102 @@
 ---
+# **********************************************************
+# Passer l’IP de statique à DHCP (Debian/Ubuntu, adapté pour esphome)
+#
+# À adapter :
+# - interface_cible (ex : eth0, ens33, enp0s3 : vérifie avec `ip a`)
+# - netplan_file (le fichier principal netplan, souvent /etc/netplan/00-installer-config.yaml)
+# - nm_conn (nom de la connexion NetworkManager, vérifie avec `nmcli c`)
+#
+# Usage :
+# ansible-playbook -i inventory.yml change-to-dhcp.yml
+# **********************************************************
+
 - name: Passer l’IP de statique à DHCP (Debian/Ubuntu)
-  hosts: server
-  become: true
+  hosts: esphome  # 👈 Cible l’hôte défini dans ton inventory
+  become: true    # Exécute en root
   vars:
-    interface_cible: ens33  # Modifie selon ton interface réseau (ex : eth0, enp0s3, etc.)
-    netplan_file: /etc/netplan/00-installer-config.yaml  # À adapter si différent
-    nm_conn: Wired\ connection\ 1  # À adapter si différent (voir `nmcli c`)
-  gather_facts: no  # Optionnel : pour éviter la collecte réseau avant la conversion
+    # À ADAPTER SELON TON ENVIRONNEMENT
+    interface_cible: eth0                     # 🔧 Nom de l’interface à configurer (ATTENTION : Vérifie avec `ip a`)
+    netplan_file: /etc/netplan/00-installer-config.yaml    # 🔧 Chemin du fichier netplan principal
+    nm_conn: "Wired connection 1"             # 🔧 Nom de la connexion NetworkManager (voir `nmcli c`)
+
+  # On désactive la collecte des facts pour aller plus vite (optionnel)
+  gather_facts: false
+
 
   tasks:
+    # -----------------------------------------------------------------------------
+    # Détection de la méthode de gestion réseau
+    # -----------------------------------------------------------------------------
+    # On vérifie quelle méthode est utilisée : netplan, interfaces, NetworkManager
 
-    # Sauvegarde de la configuration avant toute modification
-    - name: Sauvegarder la configuration réseau actuelle (netplan)
+    - name: Vérifier si netplan est utilisé
+      ansible.builtin.stat:
+        path: "{{ netplan_file }}"
+      register: netplan_stat       # Résultat dans netplan_stat
+
+    - name: Vérifier si interfaces est utilisé
+      ansible.builtin.stat:
+        path: /etc/network/interfaces
+      register: interfaces_stat    # Résultat dans interfaces_stat
+
+    - name: Vérifier si NetworkManager est utilisé
+      ansible.builtin.stat:
+        path: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
+      register: networkmanager_stat # Résultat dans networkmanager_stat
+
+    - name: Déterminer la méthode de gestion réseau
+      ansible.builtin.set_fact:
+        network_type: >-
+          {% if netplan_stat.stat.exists %}
+            netplan
+          {% elif interfaces_stat.stat.exists %}
+            interfaces
+          {% elif networkmanager_stat.stat.exists %}
+            networkmanager
+          {% else %}
+            unknown
+          {% endif %}
+
+    - name: Afficher la méthode détectée
+      ansible.builtin.debug:
+        msg: "Méthode de gestion réseau détectée : {{ network_type }}"
+
+
+    # -----------------------------------------------------------------------------
+    # Sauvegarde de la configuration actuelle
+    # -----------------------------------------------------------------------------
+
+    - name: Sauvegarder la configuration netplan
       ansible.builtin.copy:
         src: "{{ netplan_file }}"
         dest: "{{ netplan_file }}.bak"
         remote_src: true
-      when:
-        - ansible_local.network_type is undefined
-        - ansible.builtin.stat(path=netplan_file, get_attributes=false).stat.exists
+      when: netplan_stat.stat.exists
 
-    - name: Sauvegarder la configuration réseau actuelle (interfaces)
+    - name: Sauvegarder la configuration interfaces
       ansible.builtin.copy:
         src: /etc/network/interfaces
         dest: /etc/network/interfaces.bak
         remote_src: true
-      when:
-        - ansible_local.network_type is undefined
-        - ansible.builtin.stat(path="/etc/network/interfaces", get_attributes=false).stat.exists
+      when: interfaces_stat.stat.exists
 
-    - name: Sauvegarder la configuration réseau actuelle (NetworkManager)
+    - name: Sauvegarder la configuration NetworkManager
       ansible.builtin.copy:
-        src: /etc/NetworkManager/system-connections/{{ nm_conn }}
-        dest: /etc/NetworkManager/system-connections/{{ nm_conn }}.bak
+        src: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
+        dest: "/etc/NetworkManager/system-connections/{{ nm_conn }}.bak"
         remote_src: true
-      when:
-        - ansible_local.network_type is undefined
-        - ansible.builtin.stat(path="/etc/NetworkManager/system-connections/" + nm_conn, get_attributes=false).stat.exists
+      when: networkmanager_stat.stat.exists
 
-    # Détection du mode de gestion réseau
-    - name: Détecter le mode de gestion réseau
-      block:
-        - name: Vérifier si netplan est utilisé
-          ansible.builtin.stat:
-            path: "{{ netplan_file }}"
-            get_attributes: false
-          register: netplan_stat
 
-        - name: Vérifier si interfaces est utilisé
-          ansible.builtin.stat:
-            path: /etc/network/interfaces
-            get_attributes: false
-          register: interfaces_stat
+    # -----------------------------------------------------------------------------
+    # Conversion vers DHCP selon la méthode détectée
+    # -----------------------------------------------------------------------------
 
-        - name: Vérifier si NetworkManager est utilisé (fichier de connection)
-          ansible.builtin.stat:
-            path: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
-            get_attributes: false
-          register: nm_conn_stat
-
-        - name: Déterminer le mode de gestion réseau
-          ansible.builtin.set_fact:
-            network_type: >-
-              {% if netplan_stat.stat.exists %}
-                netplan
-              {% elif interfaces_stat.stat.exists %}
-                interfaces
-              {% elif nm_conn_stat.stat.exists %}
-                networkmanager
-              {% else %}
-                unknown
-              {% endif %}
-
-        - name: Enregistrer le mode de gestion réseau dans ansible_local (pour la session)
-          ansible.builtin.set_fact:
-            ansible_local:
-              network_type: "{{ network_type }}"
-
-        - name: Afficher le mode détecté
-          ansible.builtin.debug:
-            msg: "Mode de gestion réseau détecté : {{ network_type }}"
-      run_once: true
-
-    # Conversion vers DHCP selon le mode détecté
     - name: Passer en DHCP avec netplan
       ansible.builtin.blockinfile:
         path: "{{ netplan_file }}"
-        backup: yes
+        backup: yes                  # Sauvegarde avant modification
         marker: "# {mark} ANSIBLE MANAGED BLOCK: Set interface DHCP"
         block: |
           network:
@@ -96,7 +106,7 @@
               {{ interface_cible }}:
                 dhcp4: true
                 dhcp6: true
-        insertafter: EOF
+        insertafter: EOF             # Ajoute le bloc à la fin du fichier
       when: network_type == "netplan"
 
     - name: Passer en DHCP avec interfaces
@@ -107,7 +117,7 @@
         block: |
           auto {{ interface_cible }}
           iface {{ interface_cible }} inet dhcp
-        insertafter: EOF
+        insertafter: EOF             # Ajoute la ligne à la fin du fichier
       when: network_type == "interfaces"
 
     - name: Passer en DHCP avec NetworkManager
@@ -116,23 +126,34 @@
         nmcli connection up "{{ nm_conn }}"
       when: network_type == "networkmanager"
 
-    - name: Échec si aucun mode de gestion réseau connu n’est trouvé
+    - name: Échec si aucune méthode connue n’est détectée
       ansible.builtin.fail:
-        msg: "Aucun mode de gestion réseau standard (netplan, interfaces, NetworkManager) n’a été détecté."
+        msg: "Aucune méthode de gestion réseau connue (netplan, interfaces, NetworkManager) n’a été détectée."
       when: network_type == "unknown"
 
-    # Nettoyage et activation des modifications
-    - name: Appliquer la configuration netplan (si modifié)
-      ansible.builtin.command: netplan apply
-      when: network_type == "netplan" and ansible_local.netplan_modified is defined
 
-    - name: Redémarrer le service Networking (interfaces)
+    # -----------------------------------------------------------------------------
+    # Appliquer la nouvelle configuration réseau
+    # -----------------------------------------------------------------------------
+
+    - name: Appliquer la configuration netplan (netplan apply)
+      ansible.builtin.command: netplan apply
+      when: network_type == "netplan"
+
+    - name: Redémarrer le service networking (interfaces)
       ansible.builtin.service:
         name: networking
         state: restarted
       when: network_type == "interfaces"
 
-    # (Optionnel) Affichage du récapitulatif
-    - name: Afficher un message de confirmation
+
+    # -----------------------------------------------------------------------------
+    # Récapitulatif final
+    # -----------------------------------------------------------------------------
+
+    - name: Message de confirmation
       ansible.builtin.debug:
-        msg: "La configuration réseau a été modifiée pour utiliser DHCP ({{ interface_cible }}) avec le mode {{ network_type }}."
+        msg: "La configuration réseau a été modifiée pour passer de statique à DHCP sur {{ interface_cible }} (méthode : {{ network_type }})."
+
+    # ⚠️ À la fin : vérifie que la connexion fonctionne toujours avant de te déconnecter !
+    # Si tu utilises SSH pour administrer, prévois un accès de secours (console, KVM, etc.).
