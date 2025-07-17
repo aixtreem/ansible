@@ -8,7 +8,8 @@
   tasks:
 
     - name: Detect main network interface (excluding lo)
-      command: ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
+      shell: |
+        ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
       register: interface_detect
       changed_when: false
 
