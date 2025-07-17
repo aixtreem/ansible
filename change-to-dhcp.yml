@@ -1,15 +1,17 @@
 ---
-- name: Configurer eth0 (ou autre interface) en DHCP sous Debian/Ubuntu
+- name: Configurer interface réseau en DHCP sous Debian/Ubuntu
   hosts: all
   become: yes
+  gather_facts: false  # facultatif, tu peux activer si besoin
+
   vars:
-    # si besoin, tu peux fixer une interface statique ici, sinon laisse vide
+    # Optionnel, tu peux définir une interface fixe ici
     # dhcp_interface: ""
 
   tasks:
-
     - name: Detect main network interface (excluding lo)
-      command: ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
+      command: >
+        ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
       register: detect_interface
       changed_when: false
 
@@ -31,7 +33,7 @@
 
     - name: Debug contenu original /etc/network/interfaces décodé
       debug:
-        msg: "{{ interfaces_file_slurped['content'] | b64decode }}"
+        msg: "{{ interfaces_file_slurped.content | b64decode }}"
       when: interfaces_stat.stat.exists
 
     - name: Remplacer static par dhcp dans /etc/network/interfaces
@@ -40,7 +42,7 @@
         content: |
           {{
             (
-              (interfaces_file_slurped['content'] | b64decode)
+              (interfaces_file_slurped.content | b64decode)
               | regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(?:[ \t]+.+\n?)*", "")
               | regex_replace("(?m)^auto {{ dhcp_interface }}\n?", "")
               ~
