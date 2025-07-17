@@ -9,7 +9,7 @@
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFxTwgphUUj705yoC5JZn/kv4y4gGu2vJVygV3m8+pU ede@UM870"
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqjsbWlxnhsidchP3DcNWKijHzaQnE06QRsoAEpU+WR ede@semaphore"
 
-  handlers:
+   handlers:
     - name: Créer .ssh après création utilisateur
       ansible.builtin.file:
         path: "/home/{{ ssh_user }}/.ssh"
@@ -17,7 +17,6 @@
         owner: "{{ ssh_user }}"
         group: "{{ ssh_user }}"
         mode: '0700'
-      listen: L’utilisateur a été créé
 
   tasks:
     # Vérifier si l’utilisateur existe déjà
@@ -27,7 +26,7 @@
       register: user_info
       changed_when: false
 
-    # Créer l’utilisateur si besoin
+    # Créer l’utilisateur si besoin, notifier le handler
     - name: Créer l’utilisateur {{ ssh_user }} (si besoin)
       ansible.builtin.user:
         name: "{{ ssh_user }}"
