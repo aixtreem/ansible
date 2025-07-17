@@ -1,0 +1,29 @@
+---
+- name: Mettre à jour un serveur Debian (sans redémarrage automatique)
+  hosts: all
+  become: true
+
+  tasks:
+    # Rafraîchir le cache des paquets
+    - name: Mettre à jour le cache des paquets
+      ansible.builtin.apt:
+        update_cache: yes
+
+    # Mettre à jour tous les paquets
+    - name: Mettre à niveau tous les paquets
+      ansible.builtin.apt:
+        upgrade: dist
+        autoremove: yes
+
+    # Vérifier si un redémarrage est requis
+    - name: Vérifier si un redémarrage est nécessaire
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+      changed_when: false
+
+    # Afficher un message si un redémarrage est requis
+    - name: Afficher un message d’alerte si un redémarrage est nécessaire
+      ansible.builtin.debug:
+        msg: "ATTENTION : Le serveur {{ inventory_hostname }} doit être redémarré pour appliquer les mises à jour."
+      when: reboot_required.stat.exists
