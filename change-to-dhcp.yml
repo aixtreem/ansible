@@ -11,8 +11,8 @@
   tasks:
     - name: Detect main network interface (excluding lo)
       command: >
-        shell: ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
-        register: detect_interface
+      shell: ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
+      register: detect_interface
       changed_when: false
 
     - name: Set dhcp_interface variable
