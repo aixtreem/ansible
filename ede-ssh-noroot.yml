@@ -1,25 +1,34 @@
 ---
-- name: Sécuriser l’accès SSH par clé
+- name: Sécuriser l’accès SSH par clé et droits sudo
   hosts: esphome
   become: true
 
   vars:
-    ssh_user: ede           # Nom de l’utilisateur SSH autorisé
+    ssh_user: ede
     ssh_pub_keys:
-    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFxTwgphUUj705yoC5JZn/kv4y4gGu2vJVygV3m8+pU ede@UM870"  # Mettez votre clé SSH publique ici
-    - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqjsbWlxnhsidchP3DcNWKijHzaQnE06QRsoAEpU+WR ede@semaphore"
-    
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFxTwgphUUj705yoC5JZn/kv4y4gGu2vJVygV3m8+pU ede@UM870"
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqjsbWlxnhsidchP3DcNWKijHzaQnE06QRsoAEpU+WR ede@semaphore"
+
   tasks:
-    # Optionnel : Créer l’utilisateur si besoin
-    - name: Créer l’utilisateur {{ ssh_user }} (optionnel)
+
+    # Créer l’utilisateur seulement s’il n’existe pas
+    - name: Vérifier si {{ ssh_user }} existe déjà
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ ssh_user }}"
+      register: user_info
+      changed_when: false
+
+    - name: Créer l’utilisateur {{ ssh_user }} (si besoin)
       ansible.builtin.user:
         name: "{{ ssh_user }}"
         state: present
         shell: /bin/bash
-        create_home: true
+        create_home: yes
+      when: not user_info.results
 
     # Créer le répertoire .ssh sécurisé
-    - name: Créer le répertoire .ssh pour l’utilisateur
+    - name: Créer le répertoire .ssh
       ansible.builtin.file:
         path: "/home/{{ ssh_user }}/.ssh"
         state: directory
@@ -27,25 +36,33 @@
         group: "{{ ssh_user }}"
         mode: '0700'
 
-    # Installer la clé publique SSH
-    - name: Ajouter la clé SSH publique dans authorized_keys
+    # Installer les clés publiques (une par ligne)
+    - name: Ajouter les clés SSH publiques dans authorized_keys
       ansible.builtin.copy:
-        content: "{{ ssh_pub_keys }}"
+        content: "{{ ssh_pub_keys | join('\n') }}"
         dest: "/home/{{ ssh_user }}/.ssh/authorized_keys"
         owner: "{{ ssh_user }}"
         group: "{{ ssh_user }}"
         mode: '0600'
 
+    # Ajout à sudoers.d pour sudo sans mot de passe
+    - name: Donner à {{ ssh_user }} un accès sudo sans mot de passe
+      ansible.builtin.copy:
+        content: "{{ ssh_user }} ALL=(ALL:ALL) NOPASSWD:ALL"
+        dest: "/etc/sudoers.d/{{ ssh_user }}"
+        mode: '0440'
+
     # Désactiver l’authentification par mot de passe SSH
-    - name: Désactiver l’authentification par mot de passe
+    - name: Désactiver le mot de passe SSH
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
         regexp: '^PasswordAuthentication'
         line: 'PasswordAuthentication no'
         state: present
         backup: yes
+      register: modified_sshd_config
 
-    # Optionnel : Interdire l’accès SSH direct à root
+    # Interdire l’accès SSH à root
     - name: Interdire l’accès SSH à root
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
@@ -53,9 +70,11 @@
         line: 'PermitRootLogin no'
         state: present
         backup: yes
+      register: modified_sshd_root
 
-    # Redémarrer le service SSH pour appliquer
-    - name: Redémarrer le service SSHD
+    # Redémarrer SSHD si une modification a eu lieu
+    - name: Redémarrer le service SSHD si besoin
       ansible.builtin.service:
         name: sshd
         state: restarted
+      when: modified_sshd_config.changed or modified_sshd_root.changed
