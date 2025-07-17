@@ -138,10 +138,11 @@
     - name: Supprimer les paramètres statiques pour {{ interface_cible }}
       ansible.builtin.lineinfile:
         path: /etc/network/interfaces
-        regexp: '^(address|gateway|netmask|dns-nameservers|dns-search)\b'
+        regexp: '^([[:space:]]*)(address|gateway|netmask|network|broadcast|dns-nameservers|dns-search)[[:space:]]+'
         state: absent
         # On ne supprime que les lignes sous "iface {{ interface_cible }} inet static"
         insertafter: '^iface {{ interface_cible }} inet static'
+        before: '^\s*(iface|auto|source|mapping|allow-hotplug)'
       become: true      # Escalade en root (accès sudo obligatoire)
       when: network_type == "interfaces"
 
