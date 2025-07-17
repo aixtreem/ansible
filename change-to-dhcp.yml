@@ -6,15 +6,15 @@
 # Se connecte avec le compte ansible (doit avoir les droits sudo)
 # **********************************************************
 
-- name: Passer l’IP de statique à DHCP (détection automatique)
-  hosts: esphome
-  remote_user: ansible         # Utilisateur de connexion SSH (ajuster si besoin)
-  gather_facts: false          # Pas besoin de collecter les facts réseaux ici
+  - name: Passer l’IP de statique à DHCP (détection automatique)
+    hosts: esphome
+    remote_user: ansible         # Utilisateur de connexion SSH (ajuster si besoin)
+    gather_facts: false          # Pas besoin de collecter les facts réseaux ici
 
-  vars:
-    interface_cible: eth0      # 🔧 Nom de l’interface à configurer (vérifier avec ip a)
-    netplan_file: /etc/netplan/00-installer-config.yaml   # 🔧 Fichier netplan par défaut
-    nm_conn: "Wired connection 1"  # 🔧 Nom de connexion NetworkManager (voir nmcli c)
+    vars:
+      interface_cible: eth0      # 🔧 Nom de l’interface à configurer (vérifier avec ip a)
+      netplan_file: /etc/netplan/00-installer-config.yaml   # 🔧 Fichier netplan par défaut
+      nm_conn: "Wired connection 1"  # 🔧 Nom de connexion NetworkManager (voir nmcli c)
 
   tasks:
 
