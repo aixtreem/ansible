@@ -8,7 +8,7 @@
     ssh_pub_keys:
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFxTwgphUUj705yoC5JZn/kv4y4gGu2vJVygV3m8+pU ede@UM870"  # Mettez votre clé SSH publique ici
     - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqjsbWlxnhsidchP3DcNWKijHzaQnE06QRsoAEpU+WR ede@semaphore"
-	  
+    
   tasks:
     # Optionnel : Créer l’utilisateur si besoin
     - name: Créer l’utilisateur {{ ssh_user }} (optionnel)
