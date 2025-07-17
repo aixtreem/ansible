@@ -9,15 +9,6 @@
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFxTwgphUUj705yoC5JZn/kv4y4gGu2vJVygV3m8+pU ede@UM870"
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqjsbWlxnhsidchP3DcNWKijHzaQnE06QRsoAEpU+WR ede@semaphore"
 
-  handlers:
-    - name: Créer .ssh après création utilisateur
-      ansible.builtin.file:
-        path: "/home/{{ ssh_user }}/.ssh"
-        state: directory
-        owner: "{{ ssh_user }}"
-        group: "{{ ssh_user }}"
-        mode: '0700'
-
   tasks:
     # Vérifier si l’utilisateur existe déjà
     - name: Vérifier si {{ ssh_user }} existe déjà
@@ -26,7 +17,7 @@
       register: user_info
       changed_when: false
 
-    # Créer l’utilisateur si besoin, notifier le handler
+    # Créer l’utilisateur si besoin
     - name: Créer l’utilisateur {{ ssh_user }} (si besoin)
       ansible.builtin.user:
         name: "{{ ssh_user }}"
@@ -34,7 +25,15 @@
         shell: /bin/bash
         create_home: yes
       when: not user_info.stat.exists
-      notify: Créer .ssh après création utilisateur
+
+    # Créer le répertoire .ssh (explicite)
+    - name: Créer le répertoire .ssh pour {{ ssh_user }}
+      ansible.builtin.file:
+        path: "/home/{{ ssh_user }}/.ssh"
+        state: directory
+        owner: "{{ ssh_user }}"
+        group: "{{ ssh_user }}"
+        mode: '0700'
 
     # Installer les clés publiques (une par ligne)
     - name: Ajouter les clés SSH publiques dans authorized_keys
