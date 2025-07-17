@@ -108,8 +108,8 @@
           {{
             (
               interfaces_file_slurped['content'] | b64decode |
-              regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(\\s+.+\n)*", "") ~
-              "\niface {{ dhcp_interface }} inet dhcp\n"
+          regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(?:[ \t]+.+\n?)*", "") ~
+          "\niface {{ dhcp_interface }} inet dhcp\n"
             ) | trim
           }}
         backup: yes
