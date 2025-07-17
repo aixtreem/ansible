@@ -1,151 +1,38 @@
 ---
-- name: Detect and configure main network interface in DHCP
+- name: Configurer eth0 (ou autre interface) en DHCP sous Debian/Ubuntu
   hosts: all
-  become: true
+  become: yes
   vars:
-    dhcp_interface: ""
-    test_host: 1.1.1.1  # Vous pouvez mettre ici un autre IP ou domaine (ex: google.com)
+    # si besoin, tu peux fixer une interface statique ici, sinon laisse vide
+    # dhcp_interface: ""
 
   tasks:
 
-    # Détection de l'interface principale
-    - name: Detect main network interface (excluding lo, docker, veth, etc.)
-      shell: |
-        ip -o link show | awk -F': ' '$2 !~ /^lo|docker|br|veth/ {print $2}' | head -n 1
-      register: interface_detect
+    - name: Detect main network interface (excluding lo)
+      command: ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
+      register: detect_interface
       changed_when: false
 
-    - name: Set detected interface as fact
+    - name: Set dhcp_interface variable
       set_fact:
-        dhcp_interface: "{{ interface_detect.stdout }}"
+        dhcp_interface: "{{ detect_interface.stdout }}"
+      when: dhcp_interface is not defined or dhcp_interface == ""
 
-    # Détection des méthodes de gestion réseau
-    - name: Check if Netplan is used
-      stat:
-        path: /etc/netplan/
-      register: netplan_dir
-
-    - name: Check if /etc/network/interfaces exists
+    - name: Vérifier que /etc/network/interfaces existe
       stat:
         path: /etc/network/interfaces
-      register: interfaces_file
+      register: interfaces_stat
 
-    - name: Check if systemd-networkd is used
-      stat:
-        path: /etc/systemd/network
-      register: systemd_networkd_dir
-
-    - name: Check if NetworkManager is running
-      shell: systemctl is-active NetworkManager
-      register: nm_status
-      failed_when: false
-      changed_when: false
-
-    - name: Set method to use
-      set_fact:
-        net_method: >-
-          {% if nm_status.stdout == 'active' %}
-            networkmanager
-          {% elif netplan_dir.stat.exists %}
-            netplan
-          {% elif interfaces_file.stat.exists %}
-            interfaces
-          {% elif systemd_networkd_dir.stat.exists %}
-            systemd
-          {% else %}
-            unknown
-          {% endif %}
-
-    - name: Debug network method and interface
-      debug:
-        msg: |
-          Interface détectée : {{ dhcp_interface }}
-          Méthode réseau : {{ net_method }}
-
-    # === MÉTHODE : NetworkManager ===
-    - name: Set DHCP for interface via NetworkManager (nmcli)
-      when: net_method == 'networkmanager'
-      shell: |
-        nmcli connection modify "{{ dhcp_interface }}" ipv4.method auto || \
-        nmcli device modify "{{ dhcp_interface }}" ipv4.method auto
-      notify: reload NetworkManager
-
-    - name: Reactivate NetworkManager interface
-      when: net_method == 'networkmanager'
-      shell: |
-        nmcli connection reload || true
-        nmcli device disconnect "{{ dhcp_interface }}" || true
-        nmcli device connect "{{ dhcp_interface }}" || true
-
-    # === MÉTHODE : Netplan ===
-    - name: Configure DHCP with Netplan
-      when: net_method == 'netplan'
-      copy:
-        dest: "/etc/netplan/01-{{ dhcp_interface }}-dhcp.yaml"
-        content: |
-          network:
-            version: 2
-            ethernets:
-              {{ dhcp_interface }}:
-                dhcp4: true
-
-    - name: Apply Netplan config
-      when: net_method == 'netplan'
-      command: netplan apply
-
-    # === MÉTHODE : /etc/network/interfaces ===
-    - name: Read /etc/network/interfaces
-      when: net_method == 'interfaces'
+    - name: Slurp /etc/network/interfaces only if it exists
       slurp:
         path: /etc/network/interfaces
       register: interfaces_file_slurped
-
-    - name: Replace static config with DHCP
-      when: net_method == 'interfaces'
-      copy:
-        dest: /etc/network/interfaces
-        content: |
-          {{
-            (
-              interfaces_file_slurped['content'] | b64decode |
-          regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(?:[ \t]+.+\n?)*", "") ~
-          "\niface {{ dhcp_interface }} inet dhcp\n"
-            ) | trim
-          }}
-        backup: yes
-      notify: restart networking
-
-    # === MÉTHODE : systemd-networkd ===
-    - name: Configure interface via systemd-networkd
-      when: net_method == 'systemd'
-      copy:
-        dest: "/etc/systemd/network/10-{{ dhcp_interface }}.network"
-        content: |
-          [Match]
-          Name={{ dhcp_interface }}
-
-          [Network]
-          DHCP=ipv4
-      notify: restart systemd-networkd
-
-    # === TEST DE CONNECTIVITÉ ===
-    - name: Wait a few seconds for DHCP to take effect
-      pause:
-        seconds: 5
-
-    - name: Test connectivity (ping)
-      shell: ping -c 2 -W 3 {{ test_host }}
-      register: ping_result
-      ignore_errors: true
-
-    - name: Show ping result
-      debug:
-        msg: >-
-          {{ "✅ Connectivité réseau OK." if ping_result.rc == 0 else "❌ Échec de la connectivité réseau." }}
+      when: interfaces_stat.stat.exists
 
     - name: Debug contenu original /etc/network/interfaces décodé
       debug:
         msg: "{{ interfaces_file_slurped['content'] | b64decode }}"
+      when: interfaces_stat.stat.exists
 
     - name: Remplacer static par dhcp dans /etc/network/interfaces
       copy:
@@ -162,19 +49,10 @@
           }}
         backup: yes
       notify: restart networking
+      when: interfaces_stat.stat.exists
 
   handlers:
     - name: restart networking
       service:
         name: networking
         state: restarted
-
-    - name: restart systemd-networkd
-      service:
-        name: systemd-networkd
-        state: restarted
-
-    - name: reload NetworkManager
-      service:
-        name: NetworkManager
-        state: reloaded
