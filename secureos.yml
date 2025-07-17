@@ -9,32 +9,33 @@
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFxTwgphUUj705yoC5JZn/kv4y4gGu2vJVygV3m8+pU ede@UM870"
       - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqjsbWlxnhsidchP3DcNWKijHzaQnE06QRsoAEpU+WR ede@semaphore"
 
-  tasks:
-
-    # Créer l’utilisateur seulement s’il n’existe pas
-    - name: Vérifier si {{ ssh_user }} existe déjà
-      ansible.builtin.getent:
-        database: passwd
-        key: "{{ ssh_user }}"
-      register: user_info
-      changed_when: false
-
-    - name: Créer l’utilisateur {{ ssh_user }} (si besoin)
-      ansible.builtin.user:
-        name: "{{ ssh_user }}"
-        state: present
-        shell: /bin/bash
-        create_home: yes
-      when: not user_info.results
-
-    # Créer le répertoire .ssh sécurisé
-    - name: Créer le répertoire .ssh
+  handlers:
+    - name: Créer .ssh après création utilisateur
       ansible.builtin.file:
         path: "/home/{{ ssh_user }}/.ssh"
         state: directory
         owner: "{{ ssh_user }}"
         group: "{{ ssh_user }}"
         mode: '0700'
+      listen: L’utilisateur a été créé
+
+  tasks:
+    # Vérifier si l’utilisateur existe déjà
+    - name: Vérifier si {{ ssh_user }} existe déjà
+      ansible.builtin.stat:
+        path: "/home/{{ ssh_user }}"
+      register: user_info
+      changed_when: false
+
+    # Créer l’utilisateur si besoin
+    - name: Créer l’utilisateur {{ ssh_user }} (si besoin)
+      ansible.builtin.user:
+        name: "{{ ssh_user }}"
+        state: present
+        shell: /bin/bash
+        create_home: yes
+      when: not user_info.stat.exists
+      notify: Créer .ssh après création utilisateur
 
     # Installer les clés publiques (une par ligne)
     - name: Ajouter les clés SSH publiques dans authorized_keys
