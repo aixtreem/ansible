@@ -143,6 +143,27 @@
         msg: >-
           {{ "✅ Connectivité réseau OK." if ping_result.rc == 0 else "❌ Échec de la connectivité réseau." }}
 
+    - name: Debug contenu original /etc/network/interfaces décodé
+      debug:
+        msg: "{{ interfaces_file_slurped['content'] | b64decode }}"
+
+    - name: Remplacer static par dhcp dans /etc/network/interfaces
+      copy:
+        dest: /etc/network/interfaces
+        content: |
+          {{
+            (
+              (interfaces_file_slurped['content'] | b64decode)
+              | regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(?:[ \t]+.+\n?)*", "")
+              | regex_replace("(?m)^auto {{ dhcp_interface }}\n?", "")
+              ~
+              "\nauto {{ dhcp_interface }}\niface {{ dhcp_interface }} inet dhcp\n"
+            ) | trim
+          }}
+        backup: yes
+       notify: restart networking
+
+
   handlers:
     - name: restart networking
       service:
