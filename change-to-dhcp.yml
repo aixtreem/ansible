@@ -1,6 +1,6 @@
 ---
 - name: Passer l’IP de statique à DHCP (Debian/Ubuntu)
-  hosts: esphome
+  hosts: server
   become: true
   vars:
     interface_cible: ens33  # Modifie selon ton interface réseau (ex : eth0, enp0s3, etc.)
