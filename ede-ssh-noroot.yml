@@ -1,0 +1,61 @@
+---
+- name: Sécuriser l’accès SSH par clé
+  hosts: esphome
+  become: true
+
+  vars:
+    ssh_user: ede           # Nom de l’utilisateur SSH autorisé
+    ssh_pub_keys:
+	  - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDFxTwgphUUj705yoC5JZn/kv4y4gGu2vJVygV3m8+pU ede@UM870"  # Mettez votre clé SSH publique ici
+	  - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEqjsbWlxnhsidchP3DcNWKijHzaQnE06QRsoAEpU+WR ede@semaphore"
+	  
+  tasks:
+    # Optionnel : Créer l’utilisateur si besoin
+    - name: Créer l’utilisateur {{ ssh_user }} (optionnel)
+      ansible.builtin.user:
+        name: "{{ ssh_user }}"
+        state: present
+        shell: /bin/bash
+        create_home: true
+
+    # Créer le répertoire .ssh sécurisé
+    - name: Créer le répertoire .ssh pour l’utilisateur
+      ansible.builtin.file:
+        path: "/home/{{ ssh_user }}/.ssh"
+        state: directory
+        owner: "{{ ssh_user }}"
+        group: "{{ ssh_user }}"
+        mode: '0700'
+
+    # Installer la clé publique SSH
+    - name: Ajouter la clé SSH publique dans authorized_keys
+      ansible.builtin.copy:
+        content: "{{ ssh_pub_keys }}"
+        dest: "/home/{{ ssh_user }}/.ssh/authorized_keys"
+        owner: "{{ ssh_user }}"
+        group: "{{ ssh_user }}"
+        mode: '0600'
+
+    # Désactiver l’authentification par mot de passe SSH
+    - name: Désactiver l’authentification par mot de passe
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        state: present
+        backup: yes
+
+    # Optionnel : Interdire l’accès SSH direct à root
+    - name: Interdire l’accès SSH à root
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PermitRootLogin'
+        line: 'PermitRootLogin no'
+        state: present
+        backup: yes
+
+    # Redémarrer le service SSH pour appliquer
+    - name: Redémarrer le service SSHD
+      ansible.builtin.service:
+        name: sshd
+        state: restarted
