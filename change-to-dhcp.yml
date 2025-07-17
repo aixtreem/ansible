@@ -135,24 +135,24 @@
     # --- Pour interfaces style Debian ancien
     # On supprime d’abord les lignes de configuration statique (address, gateway, etc.)
     # puis on remplace la ligne iface ... static par iface ... dhcp
-    - name: Supprimer les paramètres statiques pour {{ interface_cible }}
-      ansible.builtin.lineinfile:
+    - name: Supprimer les lignes statiques sous eth0
+      ansible.builtin.replace:
         path: /etc/network/interfaces
-        regexp: '^([[:space:]]*)(address|gateway|netmask|network|broadcast|dns-nameservers|dns-search)[[:space:]]+'
-        state: absent
-        # On ne supprime que les lignes sous "iface {{ interface_cible }} inet static"
-        insertafter: '^iface {{ interface_cible }} inet static'
+      # Supprime toutes les lignes qui commencent par des espaces puis address, gateway, etc.
+        regexp: '^\s+(address|gateway|netmask|dns-nameservers|dns-search).*'
+      # Ne travaille que dans le bloc "iface eth0 inet static"
+        after: '^iface eth0 inet static'
         before: '^\s*(iface|auto|source|mapping|allow-hotplug)'
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: network_type == "interfaces"
+        state: absent
+    become: true
 
-    - name: Passer en DHCP avec interfaces
-      ansible.builtin.lineinfile:
-        path: /etc/network/interfaces
-        regexp: '^iface {{ interface_cible }} inet static'
-        line: 'iface {{ interface_cible }} inet dhcp'
-      become: true      # Escalade en root (accès sudo obligatoire)
-      when: network_type == "interfaces"
+  # Transformation de "iface eth0 inet static" en "iface eth0 inet dhcp"
+  - name: Remplacer la ligne de configuration par DHCP
+    ansible.builtin.replace:
+      path: /etc/network/interfaces
+      regexp: '^iface eth0 inet static'
+      replace: 'iface eth0 inet dhcp'
+    become: true
 
     # --- Pour NetworkManager
     - name: Passer en DHCP avec NetworkManager
