@@ -46,7 +46,7 @@
           ) }}
           auto {{ dhcp_interface }}
           iface {{ dhcp_interface }} inet dhcp
-      backup: yes
+        backup: yes
       notify: restart networking
       when: interfaces_stat.stat.exists
 
