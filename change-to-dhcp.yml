@@ -1,196 +1,106 @@
 ---
-# **********************************************************
-# Playbook : Passer l’IP de statique à DHCP (Debian/Ubuntu)
-# Détecte automatiquement la méthode réseau (ifupdown, netplan, NetworkManager)
-# Applique la conversion adaptée, sauvegarde, redémarre le service, affiche le résultat
-# Se connecte avec le compte ansible (doit avoir les droits sudo)
-# **********************************************************
-
-  - name: Passer l’IP de statique à DHCP (détection automatique)
-    hosts: esphome
-    remote_user: ansible         # Utilisateur de connexion SSH (ajuster si besoin)
-    gather_facts: false          # Pas besoin de collecter les facts réseaux ici
-
-    vars:
-      interface_cible: eth0      # 🔧 Nom de l’interface à configurer (vérifier avec ip a)
-      netplan_file: /etc/netplan/00-installer-config.yaml   # 🔧 Fichier netplan par défaut
-      nm_conn: "Wired connection 1"  # 🔧 Nom de connexion NetworkManager (voir nmcli c)
+- name: Detect and configure main network interface in DHCP
+  hosts: all
+  become: true
+  vars:
+    dhcp_interface: ""
 
   tasks:
 
-    # -------------------------------------------------------
-    # 1. Détection automatique du type de gestion réseau
-    # -------------------------------------------------------
-    # On vérifie quelle méthode est utilisée sur le système cible :
-    # - ifupdown (/etc/network/interfaces + networking.service)
-    # - netplan (/etc/netplan/*.yaml + netplan apply)
-    # - NetworkManager (/etc/NetworkManager/system-connections/)
+    - name: Detect main network interface (excluding lo)
+      command: ip -o link show | awk -F': ' '$2 != "lo" {print $2}' | head -n 1
+      register: interface_detect
+      changed_when: false
 
-    - name: Vérifier si ifupdown est utilisé (interfaces)
-      ansible.builtin.stat:
+    - name: Set detected interface as variable
+      set_fact:
+        dhcp_interface: "{{ interface_detect.stdout }}"
+
+    - name: Check if Netplan is used
+      stat:
+        path: /etc/netplan/
+      register: netplan_dir
+
+    - name: Check if /etc/network/interfaces exists
+      stat:
         path: /etc/network/interfaces
-      register: interfaces_stat
+      register: interfaces_file
 
-    - name: Vérifier si netplan est utilisé (netplan)
-      ansible.builtin.stat:
-        path: "{{ netplan_file }}"
-      register: netplan_stat
+    - name: Check if systemd-networkd is used
+      stat:
+        path: /etc/systemd/network
+      register: systemd_networkd_dir
 
-    - name: Vérifier si NetworkManager est utilisé (system-connections)
-      ansible.builtin.stat:
-        path: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
-      register: networkmanager_stat
+    - name: Debug detected interface and method
+      debug:
+        msg: |
+          Interface détectée : {{ dhcp_interface }}
+          Méthode : {{
+            'Netplan' if netplan_dir.stat.exists else
+            '/etc/network/interfaces' if interfaces_file.stat.exists else
+            'systemd-networkd' if systemd_networkd_dir.stat.exists else
+            'Inconnue'
+          }}
 
-    - name: Déterminer la méthode active
-      ansible.builtin.set_fact:
-        network_type: >-
-          {% if netplan_stat.stat.exists %}
-            netplan
-          {% elif networkmanager_stat.stat.exists %}
-            networkmanager
-          {% elif interfaces_stat.stat.exists %}
-            interfaces
-          {% else %}
-            unknown
-          {% endif %}
-
-    - name: Afficher la méthode détectée
-      ansible.builtin.debug:
-        msg: "Méthode de gestion réseau détectée : {{ network_type }}"
-
-
-    # -------------------------------------------------------
-    # 2. Sauvegarde de la configuration actuelle
-    # -------------------------------------------------------
-    - name: Sauvegarder la configuration actuelle (interfaces)
-      ansible.builtin.copy:
-        src: /etc/network/interfaces
-        dest: /etc/network/interfaces.bak
-        remote_src: true
-      become: true
-      when: network_type == "interfaces"
-
-    - name: Sauvegarder la configuration actuelle (netplan)
-      ansible.builtin.copy:
-        src: "{{ netplan_file }}"
-        dest: "{{ netplan_file }}.bak"
-        remote_src: true
-      become: true
-      when: network_type == "netplan"
-
-    - name: Sauvegarder la configuration actuelle (NetworkManager)
-      ansible.builtin.copy:
-        src: "/etc/NetworkManager/system-connections/{{ nm_conn }}"
-        dest: "/etc/NetworkManager/system-connections/{{ nm_conn }}.bak"
-        remote_src: true
-      become: true
-      when: network_type == "networkmanager"
-
-
-    # -------------------------------------------------------
-    # 3. Conversion vers DHCP selon la méthode détectée
-    # -------------------------------------------------------
-
-    # --- Méthode ifupdown (interfaces)
-    - name: Supprimer les paramètres statiques de l’interface (interfaces)
-      ansible.builtin.replace:
-        path: /etc/network/interfaces
-        regexp: '^(\s+)?(address|gateway|netmask|dns-nameservers|dns-search)\s+'
-        state: absent
-        after: '^iface {{ interface_cible }} inet static'
-        before: '^(\s*)(iface|auto|allow-hotplug|source|mapping)\b'
-      become: true
-      when: network_type == "interfaces"
-      notify: restart_networking
-
-    - name: Passer l’interface en DHCP (interfaces)
-      ansible.builtin.replace:
-        path: /etc/network/interfaces
-        regexp: '^iface {{ interface_cible }} inet static'
-        replace: 'iface {{ interface_cible }} inet dhcp'
-      become: true
-      when: network_type == "interfaces"
-      notify: restart_networking
-
-    # --- Méthode netplan
-    - name: Passer l’interface en DHCP (netplan)
-      ansible.builtin.blockinfile:
-        path: "{{ netplan_file }}"
-        marker: "# {mark} ANSIBLE MANAGED BLOCK: Set interface DHCP"
-        block: |
+    # --- Netplan Method ---
+    - name: Configure interface with DHCP via Netplan
+      when: netplan_dir.stat.exists
+      copy:
+        dest: "/etc/netplan/01-{{ dhcp_interface }}-dhcp.yaml"
+        content: |
           network:
             version: 2
-            renderer: networkd
             ethernets:
-              {{ interface_cible }}:
+              {{ dhcp_interface }}:
                 dhcp4: true
-                dhcp6: true
-        insertafter: EOF
-      become: true
-      when: network_type == "netplan"
-      notify: apply_netplan
 
-    # --- Méthode NetworkManager
-    - name: Passer l’interface en DHCP (NetworkManager)
-      ansible.builtin.shell: |
-        nmcli connection modify "{{ nm_conn }}" ipv4.method auto
-        nmcli connection up "{{ nm_conn }}"
-      become: true
-      when: network_type == "networkmanager"
+    - name: Apply Netplan config
+      when: netplan_dir.stat.exists
+      command: netplan apply
 
-    # --- Si aucune méthode connue n’est détectée
-    - name: Échec si aucune méthode connue n’est détectée
-      ansible.builtin.fail:
-        msg: "Aucune méthode de gestion réseau connue (ifupdown, netplan, NetworkManager) n’a été détectée."
-      when: network_type == "unknown"
+    # --- /etc/network/interfaces Method ---
+    - name: Remove static config block and set DHCP in /etc/network/interfaces
+      when: interfaces_file.stat.exists and not netplan_dir.stat.exists
+      block:
+        - name: Read /etc/network/interfaces
+          slurp:
+            path: /etc/network/interfaces
+          register: interfaces_file
 
+        - name: Replace static config with DHCP for detected interface
+          copy:
+            dest: /etc/network/interfaces
+            content: |
+              {{
+                (
+                  interfaces_file['content'] | b64decode |
+                  regex_replace("(?ms)^iface {{ dhcp_interface }} inet static\n(\\s+.+\n)*", "") ~
+                  "\niface {{ dhcp_interface }} inet dhcp\n"
+                ) | trim
+              }}
+            backup: yes
+          notify: restart networking
 
-# -------------------------------------------------------
-# HANDLERS (notifiers)
-# -------------------------------------------------------
-handlers:
-  - name: restart_networking        # Redémarrer le service networking (si ifupdown)
-    ansible.builtin.service:
-      name: networking
-      state: restarted
-    become: true
+    # --- systemd-networkd Method ---
+    - name: Configure interface via systemd-networkd
+      when: systemd_networkd_dir.stat.exists and not netplan_dir.stat.exists and not interfaces_file.stat.exists
+      copy:
+        dest: "/etc/systemd/network/10-{{ dhcp_interface }}.network"
+        content: |
+          [Match]
+          Name={{ dhcp_interface }}
 
-  - name: apply_netplan             # Appliquer la configuration netplan (si netplan)
-    ansible.builtin.command:
-      cmd: netplan apply
-    become: true
+          [Network]
+          DHCP=ipv4
+      notify: restart systemd-networkd
 
+  handlers:
+    - name: restart networking
+      service:
+        name: networking
+        state: restarted
 
-    # -------------------------------------------------------
-    # 5. Affichage du résultat
-    # -------------------------------------------------------
-    - name: Afficher la configuration finale (interfaces)
-      ansible.builtin.command: cat /etc/network/interfaces
-      register: interfaces_content
-      changed_when: false
-      when: network_type == "interfaces"
-
-    - name: Afficher la configuration finale (netplan)
-      ansible.builtin.command: cat "{{ netplan_file }}"
-      register: netplan_content
-      changed_when: false
-      when: network_type == "netplan"
-
-    - name: Afficher la configuration finale (NetworkManager)
-      ansible.builtin.shell: nmcli connection show "{{ nm_conn }}" | grep -A10 "ipv4.method"
-      register: networkmanager_content
-      changed_when: false
-      when: network_type == "networkmanager"
-
-    - name: Résumé final
-      ansible.builtin.debug:
-        msg: |
-          Méthode réseau : {{ network_type }}
-          Interface cible : {{ interface_cible }}
-          {% if network_type == "interfaces" %}
-          Fichier interfaces modifié : {{ interfaces_content.stdout }}
-          {% elif network_type == "netplan" %}
-          Fichier netplan modifié : {{ netplan_content.stdout }}
-          {% elif network_type == "networkmanager" %}
-          Statut NetworkManager : {{ networkmanager_content.stdout }}
-          {% endif %}
+    - name: restart systemd-networkd
+      service:
+        name: systemd-networkd
+        state: restarted
